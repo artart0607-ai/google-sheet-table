@@ -90,6 +90,7 @@ const GID = "0"; // ถ้าแผ่นงานแรกมักจะเป
 /** ตัวเลือกเสริม */
 const USE_CSV_FIRST = true;   // พยายามดึงแบบ CSV ก่อน
 const HEADER_ROW_INDEX = 0;   // แถวหัวตารางอยู่บรรทัดแรกของชีต
+const DROP_EMPTY_COLUMNS = true; // 🆕 ตัดคอลัมน์ที่ว่างทั้งคอลัมน์อัตโนมัติ
 
 /** URLs */
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${GID}`;
@@ -154,6 +155,24 @@ function downloadCSV(text){
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/** 🆕 ตัดคอลัมน์ว่างทั้งหมด */
+function pruneEmptyColumns(){
+  if(!DROP_EMPTY_COLUMNS) return;
+  const colCount = Math.max(headers.length, ...rawRows.map(r => r.length));
+  const keep = [];
+  for(let c=0; c<colCount; c++){
+    let hasData = false;
+    for(let r=0; r<rawRows.length; r++){
+      const v = (rawRows[r][c] ?? "").toString().trim();
+      if(v !== ""){ hasData = true; break; }
+    }
+    if(hasData){ keep.push(c); }
+  }
+  // Map headers and rows
+  headers = keep.map(i => headers[i] ?? "");
+  rawRows = rawRows.map(r => keep.map(i => r[i] ?? ""));
 }
 
 /** Render */
@@ -230,6 +249,7 @@ async function loadCSV(){
   if(arr.length === 0) throw new Error("CSV ว่างเปล่า");
   headers = arr[HEADER_ROW_INDEX].map(h => h?.trim?.() ?? "");
   rawRows = arr.slice(HEADER_ROW_INDEX+1);
+  pruneEmptyColumns(); // 🆕
   downloadCsvBtn.onclick = () => downloadCSV(text);
 }
 
@@ -242,9 +262,10 @@ async function loadGViz(){
   const rows = json.table.rows.map(r => (r.c||[]).map(c => (c && c.v != null) ? c.v : "" ));
   headers = cols;
   rawRows = rows;
+  pruneEmptyColumns(); // 🆕
   downloadCsvBtn.onclick = async () => {
     // สร้าง CSV จาก gviz
-    const csv = [headers.join(",")].concat(rows.map(r => r.map(v => {
+    const csv = [headers.join(",")].concat(rawRows.map(r => r.map(v => {
       const s = (v ?? "").toString().replace(/"/g,'""');
       return /[",\n\r]/.test(s) ? `"${s}"` : s;
     }).join(","))).join("\n");
