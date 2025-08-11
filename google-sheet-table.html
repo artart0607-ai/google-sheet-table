@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ตารางจาก Google Sheets (HTML5)</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --card:#121822; --muted:#6b7280; --text:#e5e7eb; --accent:#60a5fa; --accent-2:#34d399;
+      --border:#1f2937;
+    }
+    *{box-sizing:border-box}
+    body{margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial; background:var(--bg); color:var(--text);}
+    header{padding:20px; border-bottom:1px solid var(--border); background:linear-gradient(180deg, rgba(96,165,250,.12), transparent);}
+    h1{margin:0 0 8px; font-size:20px; font-weight:700;}
+    .sub{color:var(--muted); font-size:13px}
+    .wrap{max-width:1200px; margin:0 auto; padding:20px;}
+    .controls{display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px;}
+    input[type="text"]{
+      flex:1 1 320px; padding:10px 12px; border:1px solid var(--border); background:var(--card); color:var(--text);
+      border-radius:10px; outline: none;
+    }
+    select, button{
+      padding:10px 12px; border:1px solid var(--border); background:var(--card); color:var(--text); border-radius:10px; cursor:pointer;
+    }
+    button.primary{background:linear-gradient(135deg, var(--accent), var(--accent-2)); border:none; color:#001b2d; font-weight:700;}
+    .card{background:var(--card); border:1px solid var(--border); border-radius:14px; overflow:hidden;}
+    .table-wrap{overflow:auto; max-height:70vh; border-top:1px solid var(--border);}
+    table{width:100%; border-collapse:collapse; font-size:14px;}
+    thead th{position:sticky; top:0; background:#0f1622; border-bottom:1px solid var(--border); text-align:left; padding:10px; white-space:nowrap; cursor:pointer;}
+    tbody td{border-bottom:1px solid var(--border); padding:10px; vertical-align:top;}
+    tbody tr:hover{background:#0e1420;}
+    .badge{display:inline-block; font-size:12px; padding:3px 8px; border:1px solid var(--border); border-radius:999px; color:var(--muted);}
+    .status{display:flex; gap:8px; align-items:center; font-size:12px; color:var(--muted);}
+    footer{padding:20px; color:var(--muted); text-align:center; font-size:12px;}
+    .hidden{display:none;}
+  </style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>แสดงตารางจาก Google Sheets</h1>
+    <div class="sub">แก้ไขค่า <strong>SHEET_ID</strong> และ <strong>GID</strong> ด้านล่างให้ตรงกับไฟล์ของคุณ แล้วเปิดไฟล์นี้ในเบราว์เซอร์</div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="card">
+    <div class="controls" role="group" aria-label="Table controls">
+      <input id="search" type="text" placeholder="ค้นหาในตาราง..." />
+      <select id="pageSize">
+        <option value="25">25 แถว/หน้า</option>
+        <option value="50">50 แถว/หน้า</option>
+        <option value="100">100 แถว/หน้า</option>
+        <option value="999999">ทั้งหมด</option>
+      </select>
+      <button id="downloadCsv">ดาวน์โหลด CSV</button>
+      <button id="reload" class="primary">โหลดข้อมูลใหม่</button>
+    </div>
+
+    <div class="status" id="status">กำลังโหลดข้อมูล...</div>
+    <div class="table-wrap">
+      <table id="dataTable" aria-live="polite">
+        <thead><tr id="theadRow"></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="controls">
+      <span class="badge" id="paginationInfo">หน้า 1 / 1</span>
+      <div style="margin-left:auto; display:flex; gap:8px;">
+        <button id="prevPage">&larr; ก่อนหน้า</button>
+        <button id="nextPage">ถัดไป &rarr;</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  HTML5 แสดงตารางจาก Google Sheets · ใช้ได้ทั้งลิงก์ CSV และ gviz JSON · ไม่มีไลบรารีภายนอก
+</footer>
+
+<script>
+/** ==========================
+ *  CONFIG แก้ไขค่า 2 ตัวนี้
+ *  ========================== */
+const SHEET_ID = "190Vh5sy1bFjhZxZa4MyK6lz2YgKhnOlc"; // ใส่รหัสชีตจาก URL
+const GID = "0"; // ถ้าแผ่นงานแรกมักจะเป็น 0 | หากไม่ใช่ ให้เปิดชีตแล้วดูพารามิเตอร์ gid= ในแถบที่ต้องการ
+
+/** ตัวเลือกเสริม */
+const USE_CSV_FIRST = true;   // พยายามดึงแบบ CSV ก่อน
+const HEADER_ROW_INDEX = 0;   // แถวหัวตารางอยู่บรรทัดแรกของชีต
+
+/** URLs */
+const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${GID}`;
+const GVIZ_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&gid=${GID}`;
+
+/** สถานะและตัวแปร */
+let rawRows = [];     // ข้อมูลทุกแถว (ไม่รวม header)
+let headers = [];     // หัวคอลัมน์
+let filtered = [];    // หลังค้นหา
+let page = 1;
+let pageSize = 25;
+let sortKey = null;
+let sortAsc = true;
+
+/** DOM */
+const theadRow = document.getElementById("theadRow");
+const tbody = document.getElementById("tbody");
+const searchInput = document.getElementById("search");
+const pageSizeSel = document.getElementById("pageSize");
+const statusEl = document.getElementById("status");
+const nextBtn = document.getElementById("nextPage");
+const prevBtn = document.getElementById("prevPage");
+const pageInfo = document.getElementById("paginationInfo");
+const reloadBtn = document.getElementById("reload");
+const downloadCsvBtn = document.getElementById("downloadCsv");
+
+/** Utils */
+function csvToArray(text){
+  // Simple CSV parse supporting commas and quoted values
+  const rows = [];
+  let i=0, cur="", inQuotes=false, row=[];
+  while(i < text.length){
+    const c = text[i];
+    if(c === '"'){
+      if(inQuotes && text[i+1] === '"'){ cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+    }else if(c === ',' && !inQuotes){
+      row.push(cur); cur="";
+    }else if((c === '\n' || c === '\r') && !inQuotes){
+      if(cur !== "" || row.length>0){ row.push(cur); rows.push(row); row=[]; cur=""; }
+    }else{
+      cur += c;
+    }
+    i++;
+  }
+  if(cur !== "" || row.length>0){ row.push(cur); rows.push(row); }
+  return rows;
+}
+
+function setStatus(msg, isError=false){
+  statusEl.textContent = msg;
+  statusEl.style.color = isError ? "#fca5a5" : "var(--muted)";
+}
+
+function downloadCSV(text){
+  const blob = new Blob([text], {type:"text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "sheet.csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/** Render */
+function renderHeader(){
+  theadRow.innerHTML = "";
+  headers.forEach((h, idx) => {
+    const th = document.createElement("th");
+    th.textContent = h || `คอลัมน์ ${idx+1}`;
+    th.dataset.idx = idx;
+    th.title = "คลิกเพื่อเรียงลำดับ";
+    th.addEventListener("click", () => {
+      if(sortKey === idx){ sortAsc = !sortAsc; } else { sortKey = idx; sortAsc = true; }
+      applyFilterSort();
+      renderBody();
+    });
+    if(sortKey === idx){
+      const arrow = sortAsc ? " ▲" : " ▼";
+      th.textContent += arrow;
+    }
+    theadRow.appendChild(th);
+  });
+}
+
+function renderBody(){
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if(page > totalPages) page = totalPages;
+
+  const start = (page - 1) * pageSize;
+  const rows = filtered.slice(start, start + pageSize);
+
+  tbody.innerHTML = "";
+  rows.forEach(r => {
+    const tr = document.createElement("tr");
+    headers.forEach((_, idx) => {
+      const td = document.createElement("td");
+      td.textContent = r[idx] ?? "";
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+
+  pageInfo.textContent = `หน้า ${page} / ${totalPages} — ทั้งหมด ${total.toLocaleString()} แถว`;
+  prevBtn.disabled = page <= 1;
+  nextBtn.disabled = page >= totalPages;
+}
+
+/** Filter + Sort */
+function applyFilterSort(){
+  const term = searchInput.value.trim().toLowerCase();
+  filtered = rawRows.filter(r => term === "" ? true : r.some(v => (v??"").toString().toLowerCase().includes(term)));
+
+  if(sortKey !== null){
+    filtered.sort((a,b) => {
+      const av = (a[sortKey] ?? "").toString();
+      const bv = (b[sortKey] ?? "").toString();
+      const na = parseFloat(av.replace(/,/g,""));
+      const nb = parseFloat(bv.replace(/,/g,""));
+      const bothNum = !isNaN(na) && !isNaN(nb) && av.match(/^\s*-?\d/)&& bv.match(/^\s*-?\d/);
+      let cmp = 0;
+      if(bothNum){ cmp = na - nb; }
+      else{ cmp = av.localeCompare(bv, "th", {numeric:true, sensitivity:"base"}); }
+      return sortAsc ? cmp : -cmp;
+    });
+  }
+}
+
+/** Loaders */
+async function loadCSV(){
+  const res = await fetch(CSV_URL);
+  if(!res.ok) throw new Error("โหลด CSV ไม่สำเร็จ (" + res.status + ")");
+  const text = await res.text();
+  const arr = csvToArray(text);
+  if(arr.length === 0) throw new Error("CSV ว่างเปล่า");
+  headers = arr[HEADER_ROW_INDEX].map(h => h?.trim?.() ?? "");
+  rawRows = arr.slice(HEADER_ROW_INDEX+1);
+  downloadCsvBtn.onclick = () => downloadCSV(text);
+}
+
+async function loadGViz(){
+  const res = await fetch(GVIZ_URL);
+  if(!res.ok) throw new Error("โหลด gviz ไม่สำเร็จ (" + res.status + ")");
+  const text = await res.text();
+  const json = JSON.parse(text.substring(text.indexOf("{"), text.lastIndexOf("}")+1));
+  const cols = json.table.cols.map(c => c.label || c.id || "");
+  const rows = json.table.rows.map(r => (r.c||[]).map(c => (c && c.v != null) ? c.v : "" ));
+  headers = cols;
+  rawRows = rows;
+  downloadCsvBtn.onclick = async () => {
+    // สร้าง CSV จาก gviz
+    const csv = [headers.join(",")].concat(rows.map(r => r.map(v => {
+      const s = (v ?? "").toString().replace(/"/g,'""');
+      return /[",\n\r]/.test(s) ? `"${s}"` : s;
+    }).join(","))).join("\n");
+    downloadCSV(csv);
+  };
+}
+
+async function loadData(){
+  setStatus("กำลังโหลดข้อมูล...");
+  try{
+    if(USE_CSV_FIRST){
+      await loadCSV();
+    }else{
+      await loadGViz();
+    }
+    setStatus(`โหลดสำเร็จ (คอลัมน์ ${headers.length} / แถว ${rawRows.length})`);
+  }catch(err1){
+    console.warn("CSV load failed, trying gviz:", err1);
+    try{
+      await loadGViz();
+      setStatus(`โหลดสำเร็จ (ผ่าน gviz) — คอลัมน์ ${headers.length} / แถว ${rawRows.length}`);
+    }catch(err2){
+      console.error(err2);
+      setStatus("โหลดข้อมูลไม่สำเร็จ กรุณาตรวจสอบ SHEET_ID / GID และการแชร์ไฟล์ (ต้องเปิดแบบ Anyone with the link)", true);
+      return;
+    }
+  }
+  renderHeader();
+  applyFilterSort();
+  renderBody();
+}
+
+/** Events */
+searchInput.addEventListener("input", () => { page=1; applyFilterSort(); renderBody(); });
+pageSizeSel.addEventListener("change", () => { pageSize = parseInt(pageSizeSel.value,10); page=1; renderBody(); });
+nextBtn.addEventListener("click", () => { page++; renderBody(); });
+prevBtn.addEventListener("click", () => { page--; renderBody(); });
+reloadBtn.addEventListener("click", () => { loadData(); });
+
+/** Init */
+loadData();
+</script>
+
+</body>
+</html>
